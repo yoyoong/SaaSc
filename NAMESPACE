@@ -1,3 +1,11 @@
-exportPattern("^[[:alpha:]]+")
+export(rebuildMatrix)
+export(computeSignaling)
+export(getGeneRate)
+export(computeResponse)
+export(computeCorrelation)
+export(doInteraction)
+export(getTresSignature)
 
-import(MASS)
+import(Seurat)
+import(CelliD)
+import(Matrix)

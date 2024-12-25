@@ -41,116 +41,6 @@ rebuildMatrix <- function(object, features = NULL, assay = "RNA", slot = "data",
 }
 
 
-#' Title
-#'
-#' @param object
-#' @param model.file
-#' @param celltype
-#' @param cytokine
-#' @param lambda
-#' @param num.permutations
-#' @param test.method
-#'
-#' @return
-#' @export
-#'
-#' @examples
-computeSignaling <- function(object, model.file = NULL, celltype = NULL, cytokine = NULL,
-                             lambda = 10000, num.permutations = 1000, test.method = "two-sided") {
-  if (is.null(model.file)){
-    stop("Please input the model.file args")
-  } else {
-    if (!file.exists(model.file)) {
-      stop(paste0("Cannot find file: ", model.file))
-    }
-  }
-  model.data <- read.table(model.file, row.names = 1, header = TRUE, check.names = FALSE, sep = '\t')
-
-  if (!is.null(cytokine)){
-    model.cytokine <- colnames(model.data)
-    if (all(cytokine %in% model.cytokine)) {
-      use.cytokine <- cytokine
-    } else if (any(celltype %in% model.cytokine)) {
-      use.cytokine <- intersect(cytokine, model.cytokine)
-      unvalid.cytokine <- setdiff(cytokine, use.cytokine)
-      message(paste("The following cytokine not exist in model file:", unvalid.cytokine))
-    } else {
-      stop("cytokine not exist in model file.")
-    }
-    model.data <- model.data[, use.cytokine]
-  }
-
-  object.celltype <- unique(object@meta.data$celltype)
-  if (is.null(celltype)){ # support multiple celltype
-    use.celltype <- object.celltype
-  } else {
-    use.celltype <- NULL
-    if (all(celltype %in% object.celltype)) {
-      use.celltype <- celltype
-    } else if (any(celltype %in% object.celltype)) {
-      use.celltype <- intersect(celltype, object.celltype)
-      unvalid.celltype <- setdiff(celltype, use.celltype)
-      message(paste("The following celltype not exist in Seurat object:", unvalid.celltype))
-    } else {
-      stop("celltype not exist in Seurat object.")
-    }
-  }
-
-  use.gene <- intersect(rownames(model.data), rownames(object))
-  use.cell = colnames(object[, object@meta.data$celltype %in% use.celltype])
-  use.expr <- object[['SaaSc']]$data[use.gene, use.cell]
-  use.model.data <- model.data[use.gene, ]
-
-  cytokine.name <- colnames(model.data)
-  cytokine.name.valid <- make.names(cytokine.name)
-
-  # Build matrix for ridge regression
-  X <- as.matrix(use.model.data)
-  Y <- as.matrix(use.expr)
-  # Calculate ridge regression coefficients
-  tmp <- solve(t(X) %*% X + lambda * diag(ncol(X))) %*% t(X)
-  beta <- tmp %*% Y
-
-  if (!is.null(num.permutations) & num.permutations > 0) { # Do permutation
-    step = max(1, floor(num.permutations / 10))
-    average.matrix <- matrix(0, nrow = nrow(beta), ncol = ncol(beta))
-    average.sq.matrix <- matrix(0, nrow = nrow(beta), ncol = ncol(beta))
-    pvalue.matrix <- matrix(0, nrow = nrow(beta), ncol = ncol(beta))
-    for (i in 1:num.permutations) {
-      if (i %% step == 0) {
-        message(paste0("Process ", 100 * i / num.permutations, "%"))
-      }
-
-      Y.rand <- Y[sample(1:nrow(Y)), , drop = FALSE]
-      beta.rand <- tmp %*% Y.rand
-
-      if (test.method == "two-sided") {
-        pvalue.matrix = pvalue.matrix + (beta >= abs(beta.rand))
-      } else if (test.method == "greater") {
-        pvalue.matrix = pvalue.matrix + (beta >= beta.rand)
-      } else if (test.method == "less") {
-        pvalue.matrix = pvalue.matrix + (beta <= beta.rand)
-      }
-
-      average.matrix <- average.matrix + beta.rand
-      average.sq.matrix <- average.sq.matrix + beta.rand * beta.rand
-    }
-
-    average.matrix <- average.matrix / num.permutations
-    average.sq.matrix <- average.sq.matrix / num.permutations
-    pvalue.matrix <- pvalue.matrix / num.permutations
-    std.matrix <- sqrt(average.sq.matrix - average.matrix * average.matrix)
-    zscore.matrix <- (beta - average.matrix) / std.matrix
-    zscore.matrix[is.na(zscore.matrix)] <- 0
-    result <- t(zscore.matrix)
-  } else {
-    result <- t(beta)
-  }
-
-  return(result)
-}
-
-
 #' Get gene occurrence rate in background and signature genesets
 #'
 #' @param background.geneset Background genesets file name (in GMT format) or R list object.
@@ -223,6 +113,121 @@ removeDuplicates <- function(lst) {
 #' Title
 #'
 #' @param object
+#' @param model.file
+#' @param celltype
+#' @param cytokine
+#' @param lambda
+#' @param num.permutations
+#' @param test.method
+#'
+#' @return
+#' @export
+#'
+#' @examples
+computeSignaling <- function(object, model.file = NULL, celltype = NULL, cytokine = NULL,
+                             lambda = 10000, num.permutations = 1000, test.method = "two-sided") {
+  if (is.null(model.file)){
+    stop("Please input the model.file args")
+  } else {
+    if (!file.exists(model.file)) {
+      stop(paste0("Cannot find file: ", model.file))
+    }
+  }
+  model.data <- read.table(model.file, row.names = 1, header = TRUE, check.names = FALSE, sep = '\t')
+
+  if (!is.null(cytokine)){
+    model.cytokine <- colnames(model.data)
+    if (all(cytokine %in% model.cytokine)) {
+      use.cytokine <- cytokine
+    } else if (any(cytokine %in% model.cytokine)) {
+      use.cytokine <- intersect(cytokine, model.cytokine)
+      unvalid.cytokine <- setdiff(cytokine, use.cytokine)
+      message(paste("The following cytokine not exist in model file:", unvalid.cytokine))
+    } else {
+      stop("cytokine not exist in model file.")
+    }
+    model.data <- model.data[, use.cytokine]
+  }
+
+  object.celltype <- unique(object@meta.data$celltype)
+  if (is.null(celltype)){ # support multiple celltype
+    use.celltype <- object.celltype
+  } else {
+    use.celltype <- NULL
+    if (all(celltype %in% object.celltype)) {
+      use.celltype <- celltype
+    } else if (any(celltype %in% object.celltype)) {
+      use.celltype <- intersect(celltype, object.celltype)
+      unvalid.celltype <- setdiff(celltype, use.celltype)
+      message(paste("The following celltype not exist in Seurat object:", unvalid.celltype))
+    } else {
+      stop("celltype not exist in Seurat object.")
+    }
+  }
+
+  use.gene <- intersect(rownames(model.data), rownames(object))
+  use.cell = colnames(object[, object@meta.data$celltype %in% use.celltype])
+  use.expr <- object[['SaaSc']]$data[use.gene, use.cell]
+  use.model.data <- model.data[use.gene, ]
+
+  cytokine.name <- colnames(model.data)
+  cytokine.name.valid <- make.names(cytokine.name)
+
+  # Build matrix for ridge regression
+  X <- as.matrix(use.model.data)
+  Y <- as.matrix(use.expr)
+  # Calculate ridge regression coefficients
+  tmp1 <- t(X) %*% X
+  if (det(tmp1) == 0) {
+    stop("t(X) %*% X == 0, can not do ridge regression...")
+  }
+  tmp2 <- solve(tmp1 + lambda * diag(ncol(X))) %*% t(X)
+  beta <- tmp2 %*% Y
+
+  if (!is.null(num.permutations) & num.permutations > 0) { # Do permutation
+    step = max(1, floor(num.permutations / 10))
+    average.matrix <- matrix(0, nrow = nrow(beta), ncol = ncol(beta))
+    average.sq.matrix <- matrix(0, nrow = nrow(beta), ncol = ncol(beta))
+    pvalue.matrix <- matrix(0, nrow = nrow(beta), ncol = ncol(beta))
+    for (i in 1:num.permutations) {
+      if (i %% step == 0) {
+        message(paste0("Process ", 100 * i / num.permutations, "%"))
+      }
+
+      Y.rand <- Y[sample(1:nrow(Y)), , drop = FALSE]
+      beta.rand <- tmp2 %*% Y.rand
+
+      if (test.method == "two-sided") {
+        pvalue.matrix = pvalue.matrix + (beta >= abs(beta.rand))
+      } else if (test.method == "greater") {
+        pvalue.matrix = pvalue.matrix + (beta >= beta.rand)
+      } else if (test.method == "less") {
+        pvalue.matrix = pvalue.matrix + (beta <= beta.rand)
+      }
+
+      average.matrix <- average.matrix + beta.rand
+      average.sq.matrix <- average.sq.matrix + beta.rand * beta.rand
+    }
+
+    average.matrix <- average.matrix / num.permutations
+    average.sq.matrix <- average.sq.matrix / num.permutations
+    pvalue.matrix <- pvalue.matrix / num.permutations
+    std.matrix <- sqrt(average.sq.matrix - average.matrix * average.matrix)
+    zscore.matrix <- (beta - average.matrix) / std.matrix
+    zscore.matrix[is.na(zscore.matrix)] <- 0
+    result <- t(zscore.matrix)
+  } else {
+    result <- t(beta)
+  }
+
+  return(result)
+}
+
+
+
+#' Title
+#'
+#' @param object
 #' @param gene.rate
 #' @param celltype
 #' @param signature
@@ -282,8 +287,12 @@ computeResponse <- function(object, gene.rate = NULL, celltype = NULL, signature
 
 
 batchRegression <- function(X, Y) {
+  tmp <- t(X) %*% X
+  if (det(tmp) == 0) {
+    stop("t(X) %*% X == 0, can not do regression...")
+  }
   # Calculate regression coefficients
-  beta <- solve(t(X) %*% X) %*% t(X) %*% Y
+  beta <- solve(tmp) %*% t(X) %*% Y
   # Calculate residuals
   res <- Y - X %*% beta
   # Calculate the variance of the residuals
@@ -323,7 +332,8 @@ computeCorrelation <- function(object, response.data = NULL, signaling.data = NU
   cell.name <- rownames(response.data)
 
   if (is.null(signature)){
-    stop("Please input the signature args.")
+    # stop("Please input the signature args.")
+    valid.signature <- colnames(response.data)
   } else {
     valid.signature <- NULL
     if (all(signature %in% colnames(response.data))) {
@@ -338,7 +348,8 @@ computeCorrelation <- function(object, response.data = NULL, signaling.data = NU
   }
 
   if (is.null(cytokine)){
-    stop("Please input the cytokine args.")
+    # stop("Please input the cytokine args.")
+    valid.cytokine <- colnames(signaling.data)
   } else {
     valid.cytokine <- NULL
     if (all(cytokine %in% colnames(signaling.data))) {
@@ -358,7 +369,7 @@ computeCorrelation <- function(object, response.data = NULL, signaling.data = NU
     use.sample.cell.name <- cell.name[sample.names %in% use.sample]
     nCell <- length(use.sample.cell.name)
     if (nCell >= threshold) {
-      message(paste("Processing sample:", use.sample))
+      # message(paste("Processing sample:", use.sample))
       for (use.signature in valid.signature) {
         for (use.cytokine in valid.cytokine) {
               response.subset <- as.numeric(response.data[use.sample.cell.name, use.signature])
@@ -441,7 +452,7 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
     use.sample.cell.name <- cell.name[sample.names %in% use.sample]
     nCell <- length(use.sample.cell.name)
     if (nCell >= threshold) {
-      message(paste("Processing sample:", use.sample))
+      # message(paste("Processing sample:", use.sample))
       for (use.signature in valid.signature) {
         for (use.cytokine in valid.cytokine) {
           use.gene <- rownames(object[['SaaSc']]$data)
