@@ -165,7 +165,7 @@ computeSignaling <- function(object, model.file = NULL, celltype = NULL, cytokin
     }
   }
 
-  use.gene <- intersect(rownames(model.data), rownames(object))
+  use.gene <- intersect(rownames(model.data), rownames(object[['SaaSc']]$data))
   use.cell = colnames(object[, object@meta.data$celltype %in% use.celltype])
   use.expr <- object[['SaaSc']]$data[use.gene, use.cell]
   use.model.data <- model.data[use.gene, ]
@@ -262,7 +262,7 @@ computeResponse <- function(object, gene.rate = NULL, celltype = NULL, signature
     }
   }
 
-  use.gene <- intersect(rownames(gene.rate), rownames(object))
+  use.gene <- intersect(rownames(gene.rate), rownames(object[['SaaSc']]$data))
   use.cell = colnames(object[, object@meta.data$celltype == celltype])
   if (length(use.cell) < cell.threshold) {
     # message(paste("Cell number of celltype", cell.type,  "less than 100, continue..."))
@@ -452,7 +452,6 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
     use.sample.cell.name <- cell.name[sample.names %in% use.sample]
     nCell <- length(use.sample.cell.name)
     if (nCell >= threshold) {
-      # message(paste("Processing sample:", use.sample))
       for (use.signature in valid.signature) {
         for (use.cytokine in valid.cytokine) {
           use.gene <- rownames(object[['SaaSc']]$data)
@@ -477,6 +476,7 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
           result.list <- c(result.list, new.list)
         }
       }
+      message(paste("Process sample:", use.sample, "end."))
     } else {
       message(paste("Cell count of sample", use.sample, "less than threshold, continue..."))
     }
