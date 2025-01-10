@@ -455,26 +455,38 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
       for (use.signature in valid.signature) {
         for (use.cytokine in valid.cytokine) {
           use.gene <- rownames(object[['SaaSc']]$data)
-          response.subset <- as.numeric(response.data[use.sample.cell.name, use.signature])
-          signaling.subset <- as.numeric(signaling.data[use.sample.cell.name, use.cytokine])
+          response.subset <- response.data[use.sample.cell.name, use.signature]
+          signaling.subset <- signaling.data[use.sample.cell.name, use.cytokine]
           expr.subset <- object[['SaaSc']]$data[use.gene, use.sample.cell.name]
 
           regression.result <- apply(expr.subset, 1, function(row) {
             signaling.expr <- signaling.subset * row
-            X <- cbind(1, as.matrix(signaling.subset), as.matrix(row), as.matrix(signaling.expr))
+            X <- cbind(as.matrix(signaling.subset), as.matrix(row), as.matrix(signaling.expr))
+            colnames(X) <- c('signaling', 'expr', 'interaction')
             Y <- as.matrix(response.subset)
             lm.result <- lm(Y ~ X)
-            tvalue <- summary(lm.result)$coefficients[4, 3]
-            pvalue <- summary(lm.result)$coefficients[4, 4]
-            return(c(tvalue, pvalue))
+            tryCatch({
+              tvalue <- summary(lm.result)$coefficients['Xinteraction', 3]
+              pvalue <- summary(lm.result)$coefficients['Xinteraction', 4]
+              return(c(tvalue, pvalue))
+            }, error = function(e) {
+              tvalue <- NA
+              pvalue <- NA
+              return(c(tvalue, pvalue))
+            })
           })
+          tvalue <- regression.result[1, gene]
+          pvalue <- regression.result[2, ]
+          qvalue <- p.adjust(pvalue, method = "BH")
 
           new.list <- lapply(use.gene, function(gene) {
             return(list(sample = use.sample, signature = use.signature, cytokine = use.cytokine, gene = gene,
-                        interaction = regression.result[1, gene], pvalue = regression.result[2, gene]))
+                        t = tvalue[gene], pvalue = pvalue[gene], qvalue = qvalue[gene]))
           })
           result.list <- c(result.list, new.list)
+          # message(paste("Process sample:", use.sample, ", signature:", use.signature, ", cytokine:", use.cytokine, "end."))
         }
+        # message(paste("Process sample:", use.sample, ", signature:", use.signature, "end."))
       }
       message(paste("Process sample:", use.sample, "end."))
     } else {
@@ -486,8 +498,9 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
                        signature = sapply(result.list, function(x) x$signature),
                        cytokine = sapply(result.list, function(x) x$cytokine),
                        gene = sapply(result.list, function(x) x$gene),
-                       interaction = sapply(result.list, function(x) x$interaction),
-                       pvalue = sapply(result.list, function(x) x$pvalue))
+                       t = sapply(result.list, function(x) x$t),
+                       pvalue = sapply(result.list, function(x) x$pvalue),
+                       qvalue = sapply(result.list, function(x) x$qvalue))
   return(result)
 }
 
@@ -503,7 +516,8 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
 #' @export
 #'
 #' @examples
-getTresSignature <- function(interaction.dataset = NULL, signature.cytokine = NULL, pvalue = 0.05, method = "median") {
+getTresSignature <- function(interaction.dataset = NULL, signature.cytokine = NULL,
+                             pvalue = NULL, qvalue = NULL, method = "median") {
   if (is.null(interaction.dataset)) {
     stop("Please input the interaction.dataset args.")
   } else {
@@ -535,7 +549,7 @@ getTresSignature <- function(interaction.dataset = NULL, signature.cytokine = NU
   if (is.null(method)){
     stop("Please input the method args.")
   } else {
-    if (method != "median" | method != "mean") {
+    if (method != "median" & method != "mean") {
       stop("Input method must be median or mean.")
     }
   }
@@ -549,14 +563,21 @@ getTresSignature <- function(interaction.dataset = NULL, signature.cytokine = NU
   # }
 
   interaction.data <- interaction.dataset
-  interaction.data <- interaction.data[interaction.data$cytokine == signature.cytokine, ] # filter cytokine
-  interaction.data <- interaction.data[interaction.data$pvalue < pvalue, ] # filter pvalue
+  if (!is.null(valid.cytokine)) { # filter cytokine
+    interaction.data <- interaction.data[interaction.data$cytokine %in% valid.cytokine, ]
+  }
+  if (!is.null(pvalue)) { # filter pvalue
+    interaction.data <- interaction.data[interaction.data$pvalue < pvalue, ]
+  }
+  if (!is.null(qvalue)) { # filter qvalue
+    interaction.data <- interaction.data[interaction.data$qvalue < qvalue, ]
+  }
 
   interaction.data.grouped <- split(interaction.data, interaction.data$gene)
   if (method == "median") {
-    result <- sapply(interaction.data.grouped, function(x) median(x$interaction))
+    result <- sapply(interaction.data.grouped, function(x) median(x$t))
   } else if (method == "mean") {
-    result <- sapply(interaction.data.grouped, function(x) mean(x$interaction))
+    result <- sapply(interaction.data.grouped, function(x) mean(x$t))
   }
   result <- data.frame(Tres.signature = result)
 
