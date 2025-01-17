@@ -176,11 +176,25 @@ computeSignaling <- function(object, model.file = NULL, celltype = NULL, cytokin
   # Build matrix for ridge regression
   X <- as.matrix(use.model.data)
   Y <- as.matrix(use.expr)
+
   # Calculate ridge regression coefficients
-  tmp1 <- t(X) %*% X
-  if (det(tmp1) == 0) {
-    stop("t(X) %*% X == 0, can not do ridge regression...")
+  result <- ridgeRegression(X, Y, scale = TRUE, lambda = 10000, num.permutations = 1000, test.method = "two-sided")
+
+  return(result)
+}
+
+
+ridgeRegression <- function(X, Y, scale = TRUE, lambda = 0, num.permutations = 0, test.method = "two-sided") {
+  if (scale) {
+    X <- scale(X)
+    Y <- scale(Y)
   }
+
+  tmp1 <- crossprod(X)
+  # if (det(tmp1) == 0) {
+  #   stop("t(X) %*% X == 0, can not do regression...")
+  # }
+  # Calculate regression coefficients
   tmp2 <- solve(tmp1 + lambda * diag(ncol(X))) %*% t(X)
   beta <- tmp2 %*% Y
 
@@ -194,7 +208,7 @@ computeSignaling <- function(object, model.file = NULL, celltype = NULL, cytokin
         message(paste0("Process ", 100 * i / num.permutations, "%"))
       }
 
-      Y.rand <- Y[sample(1:nrow(Y)), , drop = FALSE]
+      Y.rand <- Y[sample(1:nrow(Y)), ]
       beta.rand <- tmp2 %*% Y.rand
 
       if (test.method == "two-sided") {
@@ -217,12 +231,26 @@ computeSignaling <- function(object, model.file = NULL, celltype = NULL, cytokin
     zscore.matrix[is.na(zscore.matrix)] <- 0
     result <- t(zscore.matrix)
   } else {
-    result <- t(beta)
+    # Calculate residuals
+    res <- Y - X %*% beta
+    # Calculate the variance of the residuals
+    dof <- nrow(Y) - ncol(X) + 1 # degree of freedom
+    sigma_squared <- apply(res, MARGIN = 2, FUN = function(x) {
+      return (sum(x ^ 2) / dof)
+    })
+    # Calculate the standard deviation of the coefficients
+    XtX_inv <- solve(t(X) %*% X)
+    se_beta <- sapply(sigma_squared, FUN = function(x) {
+      return (sqrt(diag(x * XtX_inv)))
+    })
+    # Calculate the t-values
+    t_values <- beta / se_beta
+
+    result <- t_values
   }
 
   return(result)
 }
-
 
 
 #' Title
@@ -273,41 +301,15 @@ computeResponse <- function(object, gene.rate = NULL, celltype = NULL, signature
   use.gene.rate <- gene.rate[use.gene, ]
 
   # Build matrix for regression
-  X <- cbind(1, as.matrix(use.gene.rate))
+  X <- as.matrix(use.gene.rate)
   Y <- as.matrix(use.expr)
 
   # Do batch regression
-  regression.result <- batchRegression(X, Y)
+  regression.result <- ridgeRegression(X, Y, scale = TRUE, lambda = 0, num.permutations = 0)
 
-  result <- as.matrix(regression.result[3, ])
+  result <- as.matrix(regression.result[2, ])
   colnames(result) <- signature
   return(result)
-}
-
-
-
-batchRegression <- function(X, Y) {
-  tmp <- t(X) %*% X
-  if (det(tmp) == 0) {
-    stop("t(X) %*% X == 0, can not do regression...")
-  }
-  # Calculate regression coefficients
-  beta <- solve(tmp) %*% t(X) %*% Y
-  # Calculate residuals
-  res <- Y - X %*% beta
-  # Calculate the variance of the residuals
-  dof <- nrow(Y) - ncol(X) + 1 # degree of freedom
-  sigma_squared <- apply(res, MARGIN = 2, FUN = function(x) {
-    return (sum(x ^ 2) / dof)
-  })
-  # Calculate the standard deviation of the coefficients
-  XtX_inv <- solve(t(X) %*% X)
-  se_beta <- sapply(sigma_squared, FUN = function(x) {
-    return (sqrt(diag(x * XtX_inv)))
-  })
-  # Calculate the t-values
-  t_values <- beta / se_beta
-  return(t_values)
 }
 
 
@@ -414,7 +416,7 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
   if (!setequal(rownames(response.data), rownames(signaling.data))) {
     stop("Cell names of response.data and signaling.data are not consistent.")
   }
-  cell.name <- rownames(response.data)
+  cell.name <- intersect(rownames(response.data), colnames(object[['SaaSc']]$data))
 
   if (is.null(signature)){
     stop("Please input the signature args.")
@@ -461,11 +463,11 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
 
           regression.result <- apply(expr.subset, 1, function(row) {
             signaling.expr <- signaling.subset * row
-            X <- cbind(as.matrix(signaling.subset), as.matrix(row), as.matrix(signaling.expr))
-            colnames(X) <- c('signaling', 'expr', 'interaction')
+            X <- cbind(1, as.matrix(signaling.subset), as.matrix(row), as.matrix(signaling.expr))
+            colnames(X) <- c('const', 'signaling', 'expr', 'interaction')
             Y <- as.matrix(response.subset)
-            lm.result <- lm(Y ~ X)
             tryCatch({
+              lm.result <- lm(Y ~ X)
               tvalue <- summary(lm.result)$coefficients['Xinteraction', 3]
               pvalue <- summary(lm.result)$coefficients['Xinteraction', 4]
               return(c(tvalue, pvalue))
@@ -475,7 +477,7 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
               return(c(tvalue, pvalue))
             })
           })
-          tvalue <- regression.result[1, gene]
+          tvalue <- regression.result[1, ]
           pvalue <- regression.result[2, ]
           qvalue <- p.adjust(pvalue, method = "BH")
 
