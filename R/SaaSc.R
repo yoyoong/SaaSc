@@ -14,29 +14,82 @@
 #' @export
 #'
 #' @examples
-rebuildMatrix <- function(object, features = NULL, assay = "RNA", slot = "data", method = NULL, avc = 0.8) {
-  if (avc > 1 | avc < 0) {
-    stop("The value of avc should be 0 to 1.")
+rebuildMatrix <- function(object, features = NULL, assay = "RNA", slot = "data", method = NULL, dim = NULL, avc = NULL) {
+  if (!is.null(avc) & !is.null(dim)) {
+    stop("Cannot enter avc and dim at the same time.")
+  }
+  if (is.null(avc) & is.null(dim)) {
+    stop("Cannot enter avc and dim at the same time.")
+  }
+  if (!is.null(avc)) {
+    if (avc > 1.0 | avc < 0.0) {
+      stop("The value of avc should be 0 to 1.")
+    }
   }
 
+
+  object <- NormalizeData(object)
+  # object <- ScaleData(object)
   if (is.null(method)) {
-    matrix <- GetAssayData(object, assay = assay, slot = slot)
-  } else if (method == "MCA") { # rebuild by MCA
-    object <- NormalizeData(object)
-    object <- RunMCA(object, nmcs = 50, features = features, assay = assay, slot = slot)
-    loadings <- object@reductions$mca@feature.loadings
-    embeddings <- object@reductions$mca@cell.embeddings
-    stdev <- object@reductions$mca@stdev
-    stdev.cumsum <- cumsum(stdev) / sum(stdev)
-    topk <- max(min(which(stdev.cumsum >= avc)), 10)
-    matrix <- loadings[, 1:topk] %*% t(embeddings[, 1:topk])
-    matrix <- log(abs(matrix) + 1) * sign(matrix)
-  }
+    rebuild.GEM <- GetAssayData(object, assay = assay, slot = slot)
+  } else {
+    if (method == "MCA") { # rebuild by MCA
+      object <- RunMCA(object, nmcs = 50, features = features, assay = assay, slot = slot)
+      loadings <- object@reductions$mca@feature.loadings
+      embeddings <- object@reductions$mca@cell.embeddings
+      stdev <- object@reductions$mca@stdev
+      stdev.cumsum <- cumsum(stdev) / sum(stdev)
+      if (!is.null(avc)) {
+        topk <- min(which(stdev.cumsum >= avc))
+      } else if (!is.null(dim)) {
+        topk <- dim
+      } else {
+        topk <- 50
+      }
+    } else if (method == "NMF") { # rebuild by NMF
+      if (!is.null(features)) {
+        object <- object[features, ]
+      }
+      nmf.object <- nmf(object[[assay]][slot], k = 50, tol = 1e-05, maxit = 500)
+      loadings <- nmf.object$w
+      embeddings <- t(nmf.object$h)
+      stdev <- nmf.object$d
+      stdev.cumsum <- cumsum(stdev) / sum(stdev)
+      if (!is.null(avc)) {
+        topk <- min(which(stdev.cumsum >= avc))
+      } else if (!is.null(dim)) {
+        topk <- dim
+      } else {
+        topk <- 50
+      }
+      rownames(loadings) <- rownames(object)
+      rownames(embeddings) <- Cells(object)
+    } else if (method == "PCA") { # rebuild by PCA
+      if (is.null(features)) {
+        features <- rownames(object)
+      }
+      object <- RunPCA(object, npcs = 50, features = features, assay = assay)
+      loadings <- object@reductions$pca@feature.loadings
+      embeddings <- object@reductions$pca@cell.embeddings
+      stdev <- object@reductions$pca@stdev
+      stdev.cumsum <- cumsum(stdev) / sum(stdev)
+      if (!is.null(avc)) {
+        topk <- min(which(stdev.cumsum >= avc))
+      } else if (!is.null(dim)) {
+        topk <- dim
+      } else {
+        topk <- 50
+      }
+    }
 
-  # Scale data
-  matrix <- matrix - apply(matrix, 1, mean)
-  matrix <- Matrix(data = matrix, sparse = TRUE)
-  object[['SaaSc']] <- CreateAssayObject(data = matrix)
+    rebuild.GEM <- loadings[, 1:topk] %*% t(embeddings[, 1:topk])
+    rebuild.GEM <- log(abs(rebuild.GEM) + 1) * sign(rebuild.GEM)
+  }
+  rownames(rebuild.GEM) <- rownames(object)
+
+  rebuild.GEM <- rebuild.GEM - apply(rebuild.GEM, 1, mean)
+  rebuild.GEM <- Matrix(data = rebuild.GEM, sparse = TRUE)
+  object[['rebuild.RNA']] <- CreateAssayObject(data = rebuild.GEM)
   return(object)
 }
 
@@ -165,9 +218,9 @@ computeSignaling <- function(object, model.file = NULL, celltype = NULL, cytokin
     }
   }
 
-  use.gene <- intersect(rownames(model.data), rownames(object[['SaaSc']]$data))
+  use.gene <- intersect(rownames(model.data), rownames(object[['rebuild.RNA']]$data))
   use.cell = colnames(object[, object@meta.data$celltype %in% use.celltype])
-  use.expr <- object[['SaaSc']]$data[use.gene, use.cell]
+  use.expr <- object[['rebuild.RNA']]$data[use.gene, use.cell]
   use.model.data <- model.data[use.gene, ]
 
   cytokine.name <- colnames(model.data)
@@ -273,7 +326,7 @@ computeResponse <- function(object, gene.rate = NULL, celltype = NULL, signature
   if (is.null(object@meta.data$celltype)){
     stop("Celltype annotation not exist in Seurat object.")
   }
-  object.celltype <- unique(object@meta.data$celltype)
+  object.celltype <- object@meta.data$celltype
   if (is.null(celltype)){
     stop("Please input the celltype args.")
   } else {
@@ -285,19 +338,19 @@ computeResponse <- function(object, gene.rate = NULL, celltype = NULL, signature
   if (is.null(signature)) {
     signature <- paste0(setdiff(colnames(gene.rate), "background"), ".response")
   } else {
-    if (length(celltype) != length(signature)) {
-      stop("The number of celltypes not consistent with the signature number.")
-    }
+    # if (length(celltype) != length(signature)) {
+    #   stop("The number of celltypes not consistent with the signature number.")
+    # }
   }
 
-  use.gene <- intersect(rownames(gene.rate), rownames(object[['SaaSc']]$data))
+  use.gene <- intersect(rownames(gene.rate), rownames(object[['rebuild.RNA']]$data))
   use.cell = colnames(object[, object@meta.data$celltype == celltype])
   if (length(use.cell) < cell.threshold) {
     # message(paste("Cell number of celltype", cell.type,  "less than 100, continue..."))
     # break
     stop("Cell number of celltype less than 100.")
   }
-  use.expr <- object[['SaaSc']]$data[use.gene, use.cell]
+  use.expr <- object[['rebuild.RNA']]$data[use.gene, use.cell]
   use.gene.rate <- gene.rate[use.gene, ]
 
   # Build matrix for regression
@@ -411,12 +464,12 @@ computeCorrelation <- function(object, response.data = NULL, signaling.data = NU
 #' @export
 #'
 #' @examples
-doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
+doInteraction <- function(object, assay = "RNA", response.data = NULL, signaling.data = NULL,
                           signature = NULL, cytokine = NULL, threshold = 100) {
   if (!setequal(rownames(response.data), rownames(signaling.data))) {
     stop("Cell names of response.data and signaling.data are not consistent.")
   }
-  cell.name <- intersect(rownames(response.data), colnames(object[['SaaSc']]$data))
+  cell.name <- intersect(rownames(response.data), colnames(object[[assay]]$data))
 
   if (is.null(signature)){
     stop("Please input the signature args.")
@@ -456,10 +509,10 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
     if (nCell >= threshold) {
       for (use.signature in valid.signature) {
         for (use.cytokine in valid.cytokine) {
-          use.gene <- rownames(object[['SaaSc']]$data)
+          use.gene <- rownames(object[['rebuild.RNA']]$data)
           response.subset <- response.data[use.sample.cell.name, use.signature]
           signaling.subset <- signaling.data[use.sample.cell.name, use.cytokine]
-          expr.subset <- object[['SaaSc']]$data[use.gene, use.sample.cell.name]
+          expr.subset <- object[['rebuild.RNA']]$data[use.gene, use.sample.cell.name]
 
           regression.result <- apply(expr.subset, 1, function(row) {
             signaling.expr <- signaling.subset * row
