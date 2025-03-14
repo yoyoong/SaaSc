@@ -554,7 +554,6 @@ doInteraction <- function(object, assay = "RNA", response.data = NULL, signaling
                        cytokine = sapply(result.list, function(x) x$cytokine),
                        gene = sapply(result.list, function(x) x$gene),
                        t = sapply(result.list, function(x) x$t),
-                       pvalue = sapply(result.list, function(x) x$pvalue),
                        qvalue = sapply(result.list, function(x) x$qvalue))
   return(result)
 }
@@ -572,7 +571,7 @@ doInteraction <- function(object, assay = "RNA", response.data = NULL, signaling
 #'
 #' @examples
 getTresSignature <- function(interaction.dataset = NULL, signature.cytokine = NULL,
-                             pvalue = NULL, qvalue = NULL, method = "median") {
+                             qvalue = 0.05, cutoff = 0.5, method = "median") {
   if (is.null(interaction.dataset)) {
     stop("Please input the interaction.dataset args.")
   } else {
@@ -609,33 +608,42 @@ getTresSignature <- function(interaction.dataset = NULL, signature.cytokine = NU
     }
   }
 
-  # if (is.null(filter)){
-  #   stop("Please input the filter args.")
-  # } else {
-  #   if (filter != "all" | filter != "any") {
-  #     stop("Input filter must be all or any.")
-  #   }
-  # }
-
-  interaction.data <- interaction.dataset
   if (!is.null(valid.cytokine)) { # filter cytokine
-    interaction.data <- interaction.data[interaction.data$cytokine %in% valid.cytokine, ]
-  }
-  if (!is.null(pvalue)) { # filter pvalue
-    interaction.data <- interaction.data[interaction.data$pvalue < pvalue, ]
-  }
-  if (!is.null(qvalue)) { # filter qvalue
-    interaction.data <- interaction.data[interaction.data$qvalue < qvalue, ]
+    interaction.dataset <- interaction.dataset[interaction.dataset$cytokine %in% valid.cytokine, ]
   }
 
-  interaction.data.grouped <- split(interaction.data, interaction.data$gene)
+
+  if (!is.null(cutoff)){
+    # group by gene and calculate the total number of samples for each gene
+    gene_sample_counts <- aggregate(sample ~ gene, data = interaction.dataset, FUN = length)
+    colnames(gene_sample_counts) <- c("gene", "total_samples")
+    # filter qvalue and calculate the filter number of samples for each gene
+    filtered_samples <- interaction.dataset[interaction.dataset$qvalue <= qvalue, ]
+    gene_filtered_counts <- aggregate(sample ~ gene, data = filtered_samples, FUN = length)
+    colnames(gene_filtered_counts) <- c("gene", "filtered_samples")
+    # merge the total sample and filter number of samples
+    merged_data <- merge(gene_sample_counts, gene_filtered_counts, by = "gene", all = TRUE)
+    merged_data$filtered_samples[is.na(merged_data$filtered_samples)] <- 0
+    merged_data$proportion <- merged_data$filtered_samples / merged_data$total_samples
+    # get the gene fit the cutoff
+    filtered_gene <- subset(merged_data, proportion > cutoff)$gene
+
+    interaction.dataset <- interaction.dataset[interaction.dataset$gene %in% filtered_gene, ]
+  }
+  interaction.data <- interaction.dataset
+  # interaction.data <- interaction.dataset[interaction.dataset$qvalue <= qvalue, ]
+
   if (method == "median") {
-    result <- sapply(interaction.data.grouped, function(x) median(x$t))
+    aggregated_by_cytokine <- aggregate(t ~ gene + sample, data = interaction.data, FUN = median)
+    aggregated_by_sample <- aggregate(t ~ gene, data = aggregated_by_cytokine, FUN = median)
+    result <- aggregated_by_sample
   } else if (method == "mean") {
-    result <- sapply(interaction.data.grouped, function(x) mean(x$t))
+    aggregated_by_cytokine <- aggregate(t ~ gene + sample, data = interaction.data, FUN = mean)
+    aggregated_by_sample <- aggregate(t ~ gene, data = aggregated_by_cytokine, FUN = mean)
+    result <- aggregated_by_sample
   }
-  result <- data.frame(Tres.signature = result)
 
+  colnames(result) <- c("gene", "Tres.score")
   return (result)
 }
 
