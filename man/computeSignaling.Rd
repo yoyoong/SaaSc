@@ -19,9 +19,9 @@ computeSignaling(
 
 \item{model.file}{Cytokine effects on genes quantitative matrix file, which row is gene and column is cytokine.}
 
-\item{celltype}{Celltype to be calculated.}
+\item{celltype}{Celltypes to be calculated.}
 
-\item{cytokine}{Cytokine to be calculated.}
+\item{cytokine}{Cytokines to be calculated.}
 
 \item{lambda}{Lambda values of ridge regression, default set to 10000.}
 
