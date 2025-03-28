@@ -9,9 +9,7 @@ rebuildMatrix(
   features = NULL,
   assay = "RNA",
   slot = "data",
-  method = NULL,
-  dim = NULL,
-  avc = NULL
+  methods = NULL
 )
 }
 \arguments{
@@ -23,11 +21,7 @@ rebuildMatrix(
 
 \item{slot}{The slot to pull expression data for Seurat, default set to "data".}
 
-\item{method}{Dimensionality reduction and reconstruction method. The choices are NULL, "MCA" , "NMF" and "PCA". NULL means no reconstruction.}
-
-\item{dim}{The number of selected dimensions, 1 <= dim <= 50. Enter only one of avc and dim.}
-
-\item{avc}{Accumulative variance contribution threshold, 0 <= avc <= 1. Enter only one of avc and dim.}
+\item{methods}{Dimensionality reduction and reconstruction methods, in a character list. The choices are "mca" , "nmf" and "pca".}
 }
 \value{
 A new seurat object include the 'rebuild.RNA' assay that store the reconstructed matrix.

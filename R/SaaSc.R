@@ -7,9 +7,9 @@
 #' @param features Character vector of feature names. If not specified all features will be taken.
 #' @param assay Name of assay MCA is being run on, default set to "RNA".
 #' @param slot The slot to pull expression data for Seurat, default set to "data".
-#' @param method Dimensionality reduction and reconstruction method. The choices are NULL, "MCA" , "NMF" and "PCA". NULL means no reconstruction.
-#' @param avc Accumulative variance contribution threshold, 0 <= avc <= 1. Enter only one of avc and dim.
+#' @param method Dimensionality reduction and reconstruction method. The choices are NULL(do not rebuild), "mca" , "nmf" and "pca".
 #' @param dim The number of selected dimensions, 1 <= dim <= 50. Enter only one of avc and dim.
+#' @param avc Accumulative variance contribution threshold, 0 <= avc <= 1. Enter only one of avc and dim.
 #'
 #' @return A new seurat object include the 'rebuild.RNA' assay that store the reconstructed matrix.
 #' @export
@@ -28,69 +28,42 @@ rebuildMatrix <- function(object, features = NULL, assay = "RNA", slot = "data",
     }
   }
 
-
   object <- NormalizeData(object)
-  # object <- ScaleData(object)
-  if (is.null(method)) {
-    rebuild.GEM <- GetAssayData(object, assay = assay, slot = slot)
-  } else {
-    if (method == "MCA") { # rebuild by MCA
-      object <- RunMCA(object, nmcs = 50, features = features, assay = assay, slot = slot)
-      loadings <- object@reductions$mca@feature.loadings
-      embeddings <- object@reductions$mca@cell.embeddings
-      stdev <- object@reductions$mca@stdev
-      stdev.cumsum <- cumsum(stdev) / sum(stdev)
-      if (!is.null(avc)) {
-        topk <- min(which(stdev.cumsum >= avc))
-      } else if (!is.null(dim)) {
-        topk <- dim
+  if (!is.null(methods)) {
+    for (use.method in method){
+      if (use.method == "mca") { # rebuild by MCA
+        object <- RunMCA(object, nmcs = 50, features = features, assay = assay, slot = slot)
+      } else if (use.method == "nmf") { # rebuild by NMF
+        if (!is.null(features)) {
+          object <- object[features, ]
+        }
+        nmf.object <- nmf(object[[assay]][slot], k = 50, tol = 1e-05, maxit = 500)
+        loadings <- nmf.object$w
+        rownames(loadings) <- rownames(object)
+        embeddings <- t(nmf.object$h)
+        rownames(embeddings) <- Cells(object)
+        stdev <- nmf.object$d
+
+        DimReducObject <- CreateDimReducObject(embeddings = embeddings, loadings = loadings,
+                                               key = paste0(use.method, "_"), assay = assay)
+        object@reductions[[use.method]] <- DimReducObject
+        object@reductions[[use.method]]@stdev <- stdev
+        object@reductions[[use.method]]@misc[[paste0(use.method, ".flag")]] <- TRUE
+      } else if (use.method == "pca") { # rebuild by PCA
+        if (is.null(features)) {
+          features <- rownames(object)
+        }
+        object <- RunPCA(object, npcs = 50, features = features, assay = assay)
       } else {
-        topk <- 50
-      }
-    } else if (method == "NMF") { # rebuild by NMF
-      if (!is.null(features)) {
-        object <- object[features, ]
-      }
-      nmf.object <- nmf(object[[assay]][slot], k = 50, tol = 1e-05, maxit = 500)
-      loadings <- nmf.object$w
-      embeddings <- t(nmf.object$h)
-      stdev <- nmf.object$d
-      stdev.cumsum <- cumsum(stdev) / sum(stdev)
-      if (!is.null(avc)) {
-        topk <- min(which(stdev.cumsum >= avc))
-      } else if (!is.null(dim)) {
-        topk <- dim
-      } else {
-        topk <- 50
-      }
-      rownames(loadings) <- rownames(object)
-      rownames(embeddings) <- Cells(object)
-    } else if (method == "PCA") { # rebuild by PCA
-      if (is.null(features)) {
-        features <- rownames(object)
-      }
-      object <- RunPCA(object, npcs = 50, features = features, assay = assay)
-      loadings <- object@reductions$pca@feature.loadings
-      embeddings <- object@reductions$pca@cell.embeddings
-      stdev <- object@reductions$pca@stdev
-      stdev.cumsum <- cumsum(stdev) / sum(stdev)
-      if (!is.null(avc)) {
-        topk <- min(which(stdev.cumsum >= avc))
-      } else if (!is.null(dim)) {
-        topk <- dim
-      } else {
-        topk <- 50
+        print(paste0("The value of methods include unvalid item: ", method))
       }
     }
 
-    rebuild.GEM <- loadings[, 1:topk] %*% t(embeddings[, 1:topk])
-    rebuild.GEM <- log(abs(rebuild.GEM) + 1) * sign(rebuild.GEM)
+    object@reductions[['active.method']] = method
+    object@reductions[['active.dim']] = dim
+    object@reductions[['active.avc']] = avc
   }
-  rownames(rebuild.GEM) <- rownames(object)
 
-  rebuild.GEM <- rebuild.GEM - apply(rebuild.GEM, 1, mean)
-  rebuild.GEM <- Matrix(data = rebuild.GEM, sparse = TRUE)
-  object[['rebuild.RNA']] <- CreateAssayObject(data = rebuild.GEM)
   return(object)
 }
 
@@ -100,7 +73,6 @@ rebuildMatrix <- function(object, features = NULL, assay = "RNA", slot = "data",
 #' @param background.geneset Background genesets file name (in GMT format) or R list object.
 #' @param signature.geneset Signature geneset, a R object of list which include tags (signature name) and values (gene list).
 #' @param mode Signature geneset mode, "single" means each geneset is a signature, "multiple" means all genesets form a signature.
-#'
 #' @return A data frame include background and signatures gene rate.
 #' @export
 #'
@@ -164,9 +136,50 @@ removeDuplicates <- function(lst) {
 }
 
 
+#' Get rebuilt matrix
+#'
+#' @param object A Seurat object processed by rebuildMatrix().
+#'
+#' @return A matrix of rebuilt matrix by reconstruction method.
+#' @export
+#'
+#' @examples
+getRebuildMatrix <- function(object) {
+  active.method = object@reductions[['active.method']]
+
+  if (is.null(active.method)) {
+    rebuild.GEM = GetAssayData(object, assay = "RNA", slot = "data")
+  } else {
+    dim = object@reductions[['active.dim']]
+    avc = object@reductions[['active.avc']]
+    if (is.null(object@reductions[[active.method]])) {
+      stop(paste("Cannot find", active.method, "reductions object in object. Run rebuildMatrix() at first."))
+    }
+    loadings <- object@reductions[[active.method]]@feature.loadings
+    embeddings <- object@reductions[[active.method]]@cell.embeddings
+    stdev <- object@reductions[[active.method]]@stdev
+    stdev.cumsum <- cumsum(stdev) / sum(stdev)
+    if (!is.null(avc)) {
+      topk <- min(which(stdev.cumsum >= avc))
+    } else if (!is.null(dim)) {
+      topk <- dim
+    } else {
+      topk <- 50
+    }
+    rebuild.GEM <- loadings[, 1:topk] %*% t(embeddings[, 1:topk])
+    rownames(rebuild.GEM) <- rownames(loadings)
+    colnames(rebuild.GEM) <- rownames(embeddings)
+    rebuild.GEM <- log(abs(rebuild.GEM) + 1) * sign(rebuild.GEM)
+  }
+
+  rebuild.GEM <- rebuild.GEM - apply(rebuild.GEM, 1, mean)
+  return(rebuild.GEM)
+}
+
+
 #' Compute signaling
 #'
-#' @param object A Seurat object processed by rebuildMatrix.
+#' @param object A Seurat object processed by rebuildMatrix().
 #' @param model.file Cytokine effects on genes quantitative matrix file, which row is gene and column is cytokine.
 #' @param celltype Celltypes to be calculated.
 #' @param cytokine Cytokines to be calculated.
@@ -220,8 +233,9 @@ computeSignaling <- function(object, model.file = NULL, celltype = NULL, cytokin
     use.cell = colnames(object[, object@meta.data$celltype %in% use.celltype])
   }
 
-  use.gene <- intersect(rownames(model.data), rownames(object[['rebuild.RNA']]$data))
-  use.expr <- object[['rebuild.RNA']]$data[use.gene, use.cell]
+  rebuild.GEM = getRebuildMatrix(object)
+  use.gene <- intersect(rownames(model.data), rownames(rebuild.GEM))
+  use.expr <- rebuild.GEM[use.gene, use.cell]
   use.model.data <- model.data[use.gene, ]
 
   cytokine.name <- colnames(model.data)
@@ -232,13 +246,13 @@ computeSignaling <- function(object, model.file = NULL, celltype = NULL, cytokin
   Y <- as.matrix(use.expr)
 
   # Calculate ridge regression coefficients
-  result <- ridgeRegression(X, Y, scale = TRUE, lambda = 10000, num.permutations = 1000, test.method = "two-sided")
+  result <- ridgeRegression(X, Y, scale = TRUE, lambda = lambda, num.permutations = num.permutations, test.method = test.method)
 
   return(result)
 }
 
 
-ridgeRegression <- function(X, Y, scale = TRUE, lambda = 0, num.permutations = 0, test.method = "two-sided") {
+ridgeRegression <- function(X, Y, scale = TRUE, lambda = 0, num.permutations = NULL, test.method = "two-sided") {
   if (scale) {
     X <- scale(X)
     Y <- scale(Y)
@@ -252,7 +266,23 @@ ridgeRegression <- function(X, Y, scale = TRUE, lambda = 0, num.permutations = 0
   tmp2 <- solve(tmp1 + lambda * diag(ncol(X))) %*% t(X)
   beta <- tmp2 %*% Y
 
-  if (!is.null(num.permutations) & num.permutations > 0) { # Do permutation
+  if (is.null(num.permutations) | num.permutations <= 0) {
+    # Calculate residuals
+    res <- Y - X %*% beta
+    # Calculate the variance of the residuals
+    dof <- nrow(Y) - ncol(X) + 1 # degree of freedom
+    sigma_squared <- apply(res, MARGIN = 2, FUN = function(x) {
+      return (sum(x ^ 2) / dof)
+    })
+    # Calculate the standard deviation of the coefficients
+    XtX_inv <- solve(t(X) %*% X)
+    se_beta <- sapply(sigma_squared, FUN = function(x) {
+      return (sqrt(diag(x * XtX_inv)))
+    })
+    # Calculate the t-values
+    t_values <- beta / se_beta
+    result <- t(t_values)
+  } else { # Do permutation
     step = max(1, floor(num.permutations / 10))
     average.matrix <- matrix(0, nrow = nrow(beta), ncol = ncol(beta))
     average.sq.matrix <- matrix(0, nrow = nrow(beta), ncol = ncol(beta))
@@ -284,23 +314,6 @@ ridgeRegression <- function(X, Y, scale = TRUE, lambda = 0, num.permutations = 0
     zscore.matrix <- (beta - average.matrix) / std.matrix
     zscore.matrix[is.na(zscore.matrix)] <- 0
     result <- t(zscore.matrix)
-  } else {
-    # Calculate residuals
-    res <- Y - X %*% beta
-    # Calculate the variance of the residuals
-    dof <- nrow(Y) - ncol(X) + 1 # degree of freedom
-    sigma_squared <- apply(res, MARGIN = 2, FUN = function(x) {
-      return (sum(x ^ 2) / dof)
-    })
-    # Calculate the standard deviation of the coefficients
-    XtX_inv <- solve(t(X) %*% X)
-    se_beta <- sapply(sigma_squared, FUN = function(x) {
-      return (sqrt(diag(x * XtX_inv)))
-    })
-    # Calculate the t-values
-    t_values <- beta / se_beta
-
-    result <- t_values
   }
 
   return(result)
@@ -309,8 +322,8 @@ ridgeRegression <- function(X, Y, scale = TRUE, lambda = 0, num.permutations = 0
 
 #' Compute response
 #'
-#' @param object A Seurat object processed by rebuildMatrix.
-#' @param gene.rate Gene rate matrix generated by getGeneRate.
+#' @param object A Seurat object processed by rebuildMatrix().
+#' @param gene.rate Gene rate matrix generated by getGeneRate().
 #' @param celltype A cell type to be calculated.
 #' @param signature Signature name corresponding to the cell type.
 #'
@@ -332,8 +345,9 @@ computeResponse <- function(object, gene.rate = NULL, celltype = NULL, signature
     use.cell = colnames(object[, object@meta.data$celltype == celltype])
   }
 
-  use.gene <- intersect(rownames(gene.rate), rownames(object[['rebuild.RNA']]$data))
-  use.expr <- object[['rebuild.RNA']]$data[use.gene, use.cell]
+  rebuild.GEM = getRebuildMatrix(object)
+  use.gene <- intersect(rownames(gene.rate), rownames(rebuild.GEM))
+  use.expr <- rebuild.GEM[use.gene, use.cell]
   use.gene.rate <- gene.rate[use.gene, ]
 
   # Build matrix for regression
@@ -342,8 +356,7 @@ computeResponse <- function(object, gene.rate = NULL, celltype = NULL, signature
 
   # Do batch regression
   regression.result <- ridgeRegression(X, Y, scale = TRUE, lambda = 0, num.permutations = 0)
-
-  result <- as.matrix(regression.result[2, ])
+  result <- as.matrix(regression.result[, 2])
   colnames(result) <- signature
   return(result)
 }
@@ -352,8 +365,8 @@ computeResponse <- function(object, gene.rate = NULL, celltype = NULL, signature
 #' Compute correlation between signaling and response
 #'
 #' @param object A Seurat object processed by rebuildMatrix, and include the sample in meta.data assay.
-#' @param response.data Response data frame generated by computeResponse.
-#' @param signaling.data Signaling data frame generated by computeSignaling.
+#' @param response.data Response data frame generated by computeResponse().
+#' @param signaling.data Signaling data frame generated by computeSignaling().
 #' @param signature Signature to be calculated.
 #' @param cytokine Cytokine to be calculated.
 #' @param threshold The cell number threshold for samples. Default set to 100.
@@ -436,9 +449,9 @@ computeCorrelation <- function(object, response.data = NULL, signaling.data = NU
 
 #' Do interaction of Tres model
 #'
-#' @param object A Seurat object processed by rebuildMatrix.
-#' @param response.data Response data frame generated by computeResponse.
-#' @param signaling.data Signaling data frame generated by computeSignaling.
+#' @param object A Seurat object processed by rebuildMatrix().
+#' @param response.data Response data frame generated by computeResponse().
+#' @param signaling.data Signaling data frame generated by computeSignaling().
 #' @param signature Signature to be calculated.
 #' @param cytokine Cytokine to be calculated.
 #' @param threshold The cell number threshold for samples. Default set to 100.
@@ -447,8 +460,7 @@ computeCorrelation <- function(object, response.data = NULL, signaling.data = NU
 #' @export
 #'
 #' @examples
-doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
-                          signature = NULL, cytokine = NULL, threshold = 100) {
+doInteraction <- function(object, response.data = NULL, signaling.data = NULL, signature = NULL, cytokine = NULL, threshold = 100) {
   if (!setequal(rownames(response.data), rownames(signaling.data))) {
     stop("Cell names of response.data and signaling.data are not consistent.")
   }
@@ -485,6 +497,7 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
   }
 
   result.list = list()
+  rebuild.GEM = getRebuildMatrix(object)
   sample.names <- object@meta.data$sample[colnames(object) %in% cell.name]
   for (use.sample in unique(sample.names)) {
     use.sample.cell.name <- cell.name[sample.names %in% use.sample]
@@ -492,10 +505,10 @@ doInteraction <- function(object, response.data = NULL, signaling.data = NULL,
     if (nCell >= threshold) {
       for (use.signature in valid.signature) {
         for (use.cytokine in valid.cytokine) {
-          use.gene <- rownames(object[['rebuild.RNA']]$data)
+          use.gene <- rownames(rebuild.GEM)
           response.subset <- response.data[use.sample.cell.name, use.signature]
           signaling.subset <- signaling.data[use.sample.cell.name, use.cytokine]
-          expr.subset <- object[['rebuild.RNA']]$data[use.gene, use.sample.cell.name]
+          expr.subset <- rebuild.GEM[use.gene, use.sample.cell.name]
 
           regression.result <- apply(expr.subset, 1, function(row) {
             signaling.expr <- signaling.subset * row
