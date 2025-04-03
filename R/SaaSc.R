@@ -55,7 +55,7 @@ rebuildMatrix <- function(object, features = NULL, assay = "RNA", slot = "data",
         }
         object <- RunPCA(object, npcs = 50, features = features, assay = assay)
       } else {
-        print(paste0("The value of methods include unvalid item: ", method))
+        print(paste0("The value of methods include invalid item: ", method))
       }
     }
 
