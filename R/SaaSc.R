@@ -53,6 +53,7 @@ rebuildMatrix <- function(object, features = NULL, assay = "RNA", slot = "data",
         if (is.null(features)) {
           features <- rownames(object)
         }
+        object <- ScaleData(object, features = features)
         object <- RunPCA(object, npcs = 50, features = features, assay = assay)
       } else {
         print(paste0("The value of methods include invalid item: ", method))
