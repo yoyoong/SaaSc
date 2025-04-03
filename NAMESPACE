@@ -6,6 +6,7 @@ export(getGeneRate)
 export(getRebuildMatrix)
 export(getTresSignature)
 export(rebuildMatrix)
+export(readGMT)
 
 import(Seurat)
 import(CelliD)
