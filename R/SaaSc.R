@@ -266,7 +266,7 @@ ridgeRegression <- function(X, Y, scale = TRUE, lambda = 0, num.permutations = N
   tmp2 <- solve(tmp1 + lambda * diag(ncol(X))) %*% t(X)
   beta <- tmp2 %*% Y
 
-  if (is.null(num.permutations) | num.permutations <= 0) {
+  if (is.null(num.permutations) || num.permutations <= 0) {
     # Calculate residuals
     res <- Y - X %*% beta
     # Calculate the variance of the residuals
